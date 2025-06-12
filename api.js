@@ -5,8 +5,37 @@ const {
     fetchFavorites,
     fetchProducts,
     createFavorite,
-    deleteFavorite
+    deleteFavorite,
+    authenticate,
+    findUserByToken
 } = require('./db')
+
+const isLoggedIn = async(req,res,next) => {
+    /**
+     * {
+     *  headers: {
+     *      authorization: token
+     *  }
+     * }
+     */
+    try {
+        const user = await findUserByToken(req.headers.authorization)
+        req.user = user
+        next()
+    } catch (error) {
+        next(error)
+    }
+}
+
+const isAdmin = (req,res,next) => {
+    if(req.user.is_admin){
+        next()
+    }else{
+        const er = Error('must be admin')
+        er.status = 401;
+        next(er)
+    }
+} 
 
 app.get('/users', async(req,res,next) => {
     try {
@@ -16,9 +45,26 @@ app.get('/users', async(req,res,next) => {
     }
 })
 
-app.get('/favorites', async(req,res,next) => {
+app.post('/login', async(req,res,next) => {
     try {
-        res.send(await fetchFavorites())
+        const token = await authenticate(req.body)
+        res.send(token)
+    } catch (error) {
+        next(error)
+    }
+})
+
+app.get('/me', isLoggedIn, (req,res,next) => {
+    try {
+        res.send(req.user)
+    } catch (error) {
+        next(error)
+    }
+})
+
+app.get('/favorites',isLoggedIn, async(req,res,next) => {
+    try {
+        res.send(await fetchFavorites(req.user.id))
     } catch (error) {
         next(error)
     }
@@ -32,6 +78,10 @@ app.get('/products', async(req,res,next) => {
     }
 })
 
+app.put('/products/:id', isLoggedIn, isAdmin, (req,res,next) => {
+    res.send('created product')
+})
+
 app.post('/favorites', async(req,res,next) => {
     try {
         res.send(await createFavorite(req.body))
@@ -42,13 +92,7 @@ app.post('/favorites', async(req,res,next) => {
 
 app.delete('/favorites/:fav_id/user/:user_id', async(req,res,next) => {
     try {
-        console.log({id: req.params.fav_id, user_id: req.params.user_id})
-        /*
-        {
-        favorite: "",
-        user_id: ""
-        }
-        */
+        
         await deleteFavorite({id: req.params.fav_id, user_id: req.params.user_id})
         res.sendStatus(201)
     } catch (error) {

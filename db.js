@@ -3,6 +3,7 @@ const client = new pg.Client(process.env.DATABASE_URL || 'postgres://localhost/f
 const {v4} = require('uuid')
 const uuidv4 = v4
 const bcrypt = require('bcrypt')
+const jwt = require("jsonwebtoken")
 
 const createProduct = async (product) => {
     const SQL = `
@@ -14,17 +15,65 @@ const createProduct = async (product) => {
     return response.rows[0]
 }
 
+const findUserByToken = async(token) => {
+    try {
+        const payload = await jwt.verify(token, process.env.JWT)
+        console.log(payload)
+        const SQL = `
+            SELECT id, username, is_admin
+            FROM users
+            WHERE id = $1
+        `
+        const response = await client.query(SQL, [payload.id])
+        if(!response.rows.length){
+            const error = Error('bad credentials')
+            error.status = 401;
+            throw error
+        }
+
+        return response.rows[0]
+    } catch (error) {
+        console.log(error)
+        const er = Error('bad token')
+        er.status = 401;
+        throw er
+    }
+}
+
+const authenticate = async (credentials) => {
+    const SQL = `
+        SELECT id, password
+        FROM users
+        WHERE username = $1
+    `
+    const response = await client.query(SQL, [credentials.username])
+    if(!response.rows.length){
+        const error = Error('incorrect username')
+        error.status = 401;
+        throw error
+    }
+    const valid = await bcrypt.compare(credentials.password, response.rows[0].password)
+    if(!valid){
+        const error = Error('incorrect password')
+        error.status = 401;
+        throw error
+    }
+    const token = await jwt.sign({id: response.rows[0].id}, process.env.JWT)
+    return {token}
+
+}
+
 const createUser = async(user) => {
     if(!user.username.trim() || !user.password.trim()){
         throw Error('must have username and password')
     }
     user.password = await bcrypt.hash(user.password, 5)
     const SQL = `
-        INSERT INTO users(id, username, password)
-        VALUES ($1, $2, $3)
+        INSERT INTO users(id, username, password, is_admin)
+        VALUES ($1, $2, $3, $4)
         RETURNING *
     `
-    const response = await client.query(SQL, [uuidv4(), user.username, user.password])
+    const response = await client.query(SQL, [uuidv4(), user.username, user.password, user.is_admin])
     return response.rows[0]
 }
 
@@ -56,12 +105,13 @@ const fetchProducts = async() => {
     return response.rows
 }
 
-const fetchFavorites = async() => {
+const fetchFavorites = async(userId) => {
     const SQL = `
         SELECT *
         FROM favorites
+        WHERE user_id = $1
     `
-    const response = await client.query(SQL)
+    const response = await client.query(SQL, [userId])
     return response.rows
 }
 
@@ -82,7 +132,8 @@ const seed = async () => {
         CREATE TABLE users(
             id UUID PRIMARY KEY,
             username VARCHAR(100) UNIQUE NOT NULL,
-            password VARCHAR(100) NOT NULL
+            password VARCHAR(100) NOT NULL,
+            is_admin BOOLEAN DEFAULT false NOT NULL
         );
         CREATE TABLE products(
             id UUID PRIMARY KEY,
@@ -104,9 +155,9 @@ const seed = async () => {
     ])
 
     const [ethyl, rowan, morgan] = await Promise.all([
-        createUser({username: 'ethyl', password: '1234'}),
-        createUser({username: 'rowan', password: 'rowniskewl'}),
-        createUser({username: 'morgan', password: 'morganiskewler'}),
+        createUser({username: 'ethyl', password: '1234', is_admin: false}),
+        createUser({username: 'rowan', password: 'rowniskewl', is_admin: false}),
+        createUser({username: 'morgan', password: 'morganiskewler', is_admin: true}),
     ])
 
     await Promise.all([
@@ -124,5 +175,7 @@ module.exports = {
     fetchProducts,
     fetchFavorites,
     createFavorite,
-    deleteFavorite
+    deleteFavorite,
+    authenticate,
+    findUserByToken
 }
